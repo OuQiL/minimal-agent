@@ -2,6 +2,7 @@ package testsupport
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"minimal-agent/internal/config"
@@ -39,6 +40,8 @@ func IntegrationConfig(t *testing.T) config.Config {
 		t.Skip("处于 -short 模式，跳过需要真实外部服务的测试")
 	}
 
+	useProjectConfig(t)
+
 	cfg, err := config.Load()
 	if err != nil {
 		t.Skipf("配置装载失败，跳过需要真实外部服务的测试: %v", err)
@@ -50,6 +53,42 @@ func IntegrationConfig(t *testing.T) config.Config {
 			"OPENAI_API_KEY", EnvEnable)
 	}
 	return cfg
+}
+
+// useProjectConfig 让测试能找到项目根目录下的配置文件。
+//
+// go test 的工作目录是**包目录**（如 internal/agent），而不是项目根目录，
+// 因此按工作目录查找的 config.Load() 在测试里读不到根目录的 config.yaml。
+// 这里向上逐级查找，遇到 go.mod 即认定到达项目根并停止。
+//
+// 产品本身不这么做：对 CLI 而言「读当前工作目录」是明确且可预期的行为，
+// 而向上搜索会让父目录里一个无关的配置文件悄悄生效。这个补偿只属于测试。
+func useProjectConfig(t *testing.T) {
+	t.Helper()
+
+	if os.Getenv(config.EnvConfigPath) != "" {
+		return // 已显式指定，尊重调用方的选择
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for {
+		candidate := filepath.Join(dir, config.DefaultFileName)
+		if _, err := os.Stat(candidate); err == nil {
+			t.Setenv(config.EnvConfigPath, candidate)
+			t.Logf("使用项目配置文件 %s", candidate)
+			return
+		}
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return // 已到项目根，没找到
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
 }
 
 // RequireModelKey 在缺少模型密钥时跳过。

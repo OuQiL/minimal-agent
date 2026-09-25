@@ -154,7 +154,10 @@ func (l *Loop) Run(ctx context.Context, sessionID, input string, sink llm.Sink) 
 		}
 		slog.Info("执行工具", "session", sessionID, "count", len(calls))
 
-		outcomes := l.executor.Execute(ctx, calls)
+		// 会话标识必须经由 context 传给工具：todo 这类工具需要知道自己作用于
+		// 哪个会话，而循环是唯一知道当前会话的地方。工具是在启动时一次性注册的，
+		// 无法把会话绑定在工具实例上。
+		outcomes := l.executor.Execute(tool.WithSessionID(ctx, sessionID), calls)
 		ex.Turns++
 
 		// 并发执行结束后串行落库：工具结果消息与 trace 都在这里写入，

@@ -460,6 +460,77 @@ func TestRun_ReportsAliasAndRepeatedCalls(t *testing.T) {
 	}
 }
 
+// 会话标识必须经由 context 传到工具——todo 依赖它决定写进哪个会话。
+//
+// 这条曾经漏掉过，而且单元测试没能发现：工具层测试自己构造了带会话的
+// context（所以通过），循环层测试从没用过 todo 工具（所以也没发现）。
+// 两个测试各自成立，缝隙里漏掉了「谁负责把会话塞进去」这个问题。
+// 是真实模型集成测试把它暴露出来的。
+func TestRun_PassesSessionIDToTools(t *testing.T) {
+	h := newHarness(t, []testsupport.Script{
+		testsupport.ToolCall("c1", "sessionecho", `{}`),
+		testsupport.Answer("好的"),
+	}, harnessOpts{})
+	h.register(&sessionEchoTool{})
+
+	if ex := h.run("你的会话标识是什么", nil); ex.Failed {
+		t.Fatalf("不应失败: %+v", ex)
+	}
+
+	var got string
+	for _, m := range h.messages() {
+		if m.Role == model.RoleTool {
+			got = m.Content
+		}
+	}
+	if got != testSession {
+		t.Errorf("工具收到的会话标识 = %q，期望 %q", got, testSession)
+	}
+}
+
+// 同名工具在另一个会话中执行时，拿到的应当是那个会话的标识。
+func TestRun_SessionIDFollowsCurrentSession(t *testing.T) {
+	h := newHarness(t, []testsupport.Script{
+		testsupport.ToolCall("c1", "sessionecho", `{}`),
+		testsupport.Answer("好的"),
+	}, harnessOpts{})
+	h.register(&sessionEchoTool{})
+
+	const other = "sess_other"
+	if _, err := h.store.CreateSession(other, "另一个会话"); err != nil {
+		t.Fatalf("创建会话失败: %v", err)
+	}
+	if _, err := h.loop.Run(t.Context(), other, "你的会话标识是什么", nil); err != nil {
+		t.Fatalf("执行失败: %v", err)
+	}
+
+	var got string
+	for _, m := range h.messagesFor(other) {
+		if m.Role == model.RoleTool {
+			got = m.Content
+		}
+	}
+	if got != other {
+		t.Errorf("工具收到的会话标识 = %q，期望 %q", got, other)
+	}
+}
+
+type sessionEchoTool struct{}
+
+func (s *sessionEchoTool) Name() string { return "sessionecho" }
+func (s *sessionEchoTool) Description() string {
+	return "返回当前会话标识，用于验证会话传递"
+}
+func (s *sessionEchoTool) Aliases() []string       { return nil }
+func (s *sessionEchoTool) Parameters() tool.Schema { return tool.Schema{Type: "object"} }
+
+func (s *sessionEchoTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	if id := tool.SessionIDFrom(ctx); id != "" {
+		return id, nil
+	}
+	return "NO_SESSION", nil
+}
+
 func TestRun_ToolResultsAreTruncatedInTraceOnly(t *testing.T) {
 	long := strings.Repeat("很长的结果", 200)
 	h := newHarness(t, []testsupport.Script{

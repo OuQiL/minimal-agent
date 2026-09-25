@@ -110,10 +110,27 @@ func TestIntegration_CalculatorToolChain(t *testing.T) {
 	}
 	// 1234 * 5678 = 7006652。模型必须把这个数字用进回答，
 	// 否则说明工具结果没有被正确回填或读取。
-	if !strings.Contains(ex.Answer, "7006652") {
+	//
+	// 比对前先剥掉千分位分隔符：模型很可能把结果写成 7,006,652，
+	// 断言应当针对数值本身，而不是它的书写格式。
+	if !strings.Contains(normalizeDigits(ex.Answer), "7006652") {
 		t.Errorf("答复中应包含工具算出的结果 7006652，实际：%s", ex.Answer)
 	}
 	t.Logf("答复：%s", ex.Answer)
+}
+
+// normalizeDigits 只保留数字字符，剥掉千分位逗号、空格等格式符号。
+//
+// 真实模型会自由地格式化数值（7,006,652 / 7 006 652 / 7_006_652），
+// 断言若绑定到某一种写法就会变成脆弱测试。
+func normalizeDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // 真实模型 + 真实天气服务：这是一条完整的外部链路。
@@ -187,7 +204,9 @@ func TestIntegration_ResolvesFollowUpReference(t *testing.T) {
 	if ex.Failed {
 		t.Fatalf("第二轮失败: %+v", ex)
 	}
-	if !strings.Contains(ex.Answer, "杭州") {
+	// 接受中英文两种写法：模型可能答「杭州」，也可能答「Hangzhou」。
+	answer := strings.ToLower(ex.Answer)
+	if !strings.Contains(ex.Answer, "杭州") && !strings.Contains(answer, "hangzhou") {
 		t.Errorf("追问应能依据历史答出「杭州」，实际：%s", ex.Answer)
 	}
 	t.Logf("追问答复：%s", ex.Answer)
@@ -303,8 +322,8 @@ func TestIntegration_MultipleToolsInOneTurnKeepOrder(t *testing.T) {
 	if len(ids) != len(tr) {
 		t.Errorf("工具结果数 %d 与 trace 数 %d 不一致", len(ids), len(tr))
 	}
-	// 968 = 88 * 11，应当出现在回答里。
-	if !strings.Contains(ex.Answer, "968") {
+	// 968 = 88 * 11，应当出现在回答里（同样按数值而非书写格式比对）。
+	if !strings.Contains(normalizeDigits(ex.Answer), "968") {
 		t.Errorf("答复中应含 88*11 的结果 968，实际：%s", ex.Answer)
 	}
 	t.Logf("调用顺序：%v", ids)

@@ -129,7 +129,12 @@ func (h *harness) run(input string, sink llm.Sink) *agent.Exchange {
 
 func (h *harness) messages() []model.Message {
 	h.t.Helper()
-	msgs, err := h.store.Messages(testSession, 0)
+	return h.messagesFor(testSession)
+}
+
+func (h *harness) messagesFor(sessionID string) []model.Message {
+	h.t.Helper()
+	msgs, err := h.store.Messages(sessionID, 0)
 	if err != nil {
 		h.t.Fatalf("读取消息失败: %v", err)
 	}
