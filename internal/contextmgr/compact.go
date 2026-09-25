@@ -97,6 +97,33 @@ func (c *Compactor) compact(ctx context.Context, sessionID string, msgs []model.
 	return tail, true, nil
 }
 
+// summarySystemPrompt 是摘要调用的系统提示。
+const summarySystemPrompt = "你负责把对话压缩成结构化摘要。严格按用户给出的格式输出，不要添加格式之外的内容。"
+
+// summaryTemplate 是压缩对话的提示模板。
+//
+// 两段式设计：
+//   - <analysis> 是草稿，按时间顺序逐条梳理对话。它不会被保留（extractSummary
+//     会丢弃它），作用是让模型在写摘要前先完整过一遍原始对话，减少遗漏。
+//   - <summary> 才是要落库的正文，按固定小节组织。
+//
+// 第 2 节（用户消息原文）刻意不设字数上限：用户说过的话是最不该丢的信息，
+// 其余各节合计限制在 500 字以内，把预算让给它。
+const summaryTemplate = `你是对话历史压缩器。把给定的对话压缩成结构化摘要，供后续对话作为背景参考。
+
+【第一步】先输出 <analysis> 块：按时间顺序逐条梳理这段对话——每轮用户说了什么、你做了什么、调用了哪些工具、得到什么结论。这是草稿，不会被保留。
+
+【第二步】再输出 <summary> 块，按下列小节组织，缺哪节写「无」：
+1. 用户的请求与意图：逐条列出用户显式提出的要求，保留关键措辞。
+2. 用户消息原文：逐条列出用户说过的每一句话（工具结果不算）。这一节不设字数上限，一条都不能漏。
+3. 实体与事实：出现过的地名、人名、数字、时间、结论。
+4. 工具调用结论：调用了哪个工具、得到的关键事实。不必保留完整返回。
+5. 未完成事项：用户要求但尚未办完的事。
+6. 当前状态：最后一次交互时正在处理什么。
+7. 下一步：仅当与用户最近一次显式请求直接相关时才写。
+
+【约束】不要编造原文没有的信息，不确定的宁可不写。全部用中文。除第 2 节外，其余各节合计控制在 500 字以内。`
+
 // LLMSummarizer 用模型生成摘要。
 type LLMSummarizer struct {
 	client *llm.Client
@@ -112,17 +139,14 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, previous string, msgs []m
 	}
 
 	var b strings.Builder
-	b.WriteString("请把下面这段对话压缩成一段简洁的摘要，供后续对话作为背景参考。\n\n")
-	b.WriteString("要求：\n")
-	b.WriteString("1. 保留事实性信息：出现过的实体（人名、地名、数字、结论）、用户表达的偏好与目标、未完成的事项。\n")
-	b.WriteString("2. 保留工具调用的关键结论（例如查到的天气、搜索结果的核心事实），但不必保留完整的原始返回。\n")
-	b.WriteString("3. 不要编造原文没有的信息。如果某条信息不确定，宁可不写。\n")
-	b.WriteString("4. 用中文，控制在 300 字以内，直接输出摘要正文，不要加标题或客套话。\n\n")
+	b.WriteString(summaryTemplate)
+	b.WriteString("\n\n")
 
-	if strings.TrimSpace(previous) != "" {
+	if prev := strings.TrimSpace(previous); prev != "" {
 		b.WriteString("【已有摘要】\n")
-		b.WriteString(previous)
-		b.WriteString("\n\n请把已有摘要与下面的新对话合并成一份新的摘要。\n\n")
+		b.WriteString(prev)
+		b.WriteString("\n\n上面是此前生成的摘要。请把它与下面的新对话合并成一份新的结构化摘要，" +
+			"第 2 节要完整包含两处的用户消息原文。\n\n")
 	}
 
 	b.WriteString("【需要压缩的对话】\n")
@@ -130,33 +154,92 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, previous string, msgs []m
 
 	resp, err := s.client.Complete(ctx, []model.Message{
 		{Role: model.RoleUser, Content: b.String()},
-	}, "你是一个负责压缩对话历史的助手，只输出摘要正文。")
+	}, summarySystemPrompt)
 	if err != nil {
 		return "", err
 	}
-	text := strings.TrimSpace(resp.Content)
-	if text == "" {
+
+	summary := extractSummary(resp.Content)
+	if summary == "" {
 		return "", fmt.Errorf("摘要生成为空")
 	}
-	return text, nil
+	return summary, nil
+}
+
+// extractSummary 从模型返回中取出 <summary> 块，丢弃 <analysis> 草稿。
+//
+// 模型的输出格式不总是规整，因此逐级降级，而不是一遇意外就整段丢弃：
+//
+//  1. 正常路径：取 <summary> 与 </summary> 之间的内容；
+//  2. 只开了 <summary> 没闭合：取到结尾——总比丢掉整段摘要好；
+//  3. 只输出了草稿：取 </analysis> 之后的内容，并去掉可能残留的标签；
+//  4. 完全没按格式来：整段当作摘要，但剥掉已知的标签。
+//
+// 最后两级是兜底：宁可存下一段不那么规整的摘要，也好过让调用方退回
+// 纯规则裁剪、把这段历史彻底丢掉。
+func extractSummary(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+
+	// 缺少闭合标签时 Cut 会返回剩余全部内容——总比丢掉整段摘要好。
+	if _, rest, ok := strings.Cut(text, "<summary>"); ok {
+		body, _, _ := strings.Cut(rest, "</summary>")
+		return strings.TrimSpace(body)
+	}
+
+	if _, rest, ok := strings.Cut(text, "</analysis>"); ok {
+		return stripTags(rest)
+	}
+
+	return stripTags(text)
+}
+
+func stripTags(s string) string {
+	s = strings.ReplaceAll(s, "<analysis>", "")
+	s = strings.ReplaceAll(s, "</analysis>", "")
+	s = strings.ReplaceAll(s, "<summary>", "")
+	s = strings.ReplaceAll(s, "</summary>", "")
+	return strings.TrimSpace(s)
 }
 
 // renderMessages 把消息渲染成便于模型阅读的纯文本。
+//
+// 工具结果那行必须写工具名而不是调用标识：标识形如
+// call_00_j4ppBskuLmdE734MytOH6512，对模型而言是一串无意义的随机字符，
+// 无法据此判断这条结果是哪个工具给出的。实测中模型会因此写下
+// 「未展示具体工具调用」这类含糊结论。
+//
+// 工具名不在 tool 消息上——它在前一条 assistant 消息的 tool_calls 里，
+// 而那条消息一定先出现，所以边遍历边记下映射即可。
 func renderMessages(msgs []model.Message) string {
 	var b strings.Builder
+	toolNames := make(map[string]string, len(msgs))
+
 	for _, m := range msgs {
 		switch m.Role {
 		case model.RoleUser:
 			fmt.Fprintf(&b, "用户：%s\n", m.Content)
+
 		case model.RoleAssistant:
 			if m.Content != "" {
 				fmt.Fprintf(&b, "助手：%s\n", m.Content)
 			}
 			for _, tc := range m.ToolCalls {
+				toolNames[tc.ID] = tc.Name
 				fmt.Fprintf(&b, "（助手调用工具 %s，参数 %s）\n", tc.Name, tc.Args)
 			}
+
 		case model.RoleTool:
-			fmt.Fprintf(&b, "工具 %s 返回：%s\n", m.ToolCallID, m.Content)
+			if name, ok := toolNames[m.ToolCallID]; ok {
+				fmt.Fprintf(&b, "工具 %s 返回：%s\n", name, m.Content)
+			} else {
+				// 对应的助手消息被历史窗口截断时无法还原工具名。
+				// 如实说明，既不编造一个名字，也不把无意义的标识塞给模型。
+				fmt.Fprintf(&b, "（某工具，未能确定是哪一个）返回：%s\n", m.Content)
+			}
+
 		case model.RoleSystem:
 			// 系统消息不参与摘要，它每次请求都会重新注入。
 		}
