@@ -113,30 +113,64 @@ func parseTime(s string) time.Time {
 
 // --- 会话 ---
 
+// sessionColumns 是会话查询的公共部分。
+//
+// 两个派生列：
+//   - num：面向用户的编号，按创建时间升序从 1 开始。单用户场景下比随机标识
+//     好输得多，且它由创建顺序推导，不随列表排序变化而改变。
+//   - preview：首条用户消息，让用户一眼认出这是哪段对话。
+const sessionColumns = `
+	SELECT s.id, s.title, s.summary, s.created_at, s.updated_at,
+	       ROW_NUMBER() OVER (ORDER BY s.created_at ASC, s.id ASC) AS num,
+	       COALESCE((
+	           SELECT m.content FROM messages m
+	           WHERE m.session_id = s.id AND m.role = 'user'
+	           ORDER BY m.seq ASC LIMIT 1
+	       ), '') AS preview
+	FROM sessions s`
+
 // CreateSession 新建一个会话。
 func (s *Store) CreateSession(id, title string) (*model.Session, error) {
 	now := time.Now()
-	_, err := s.db.Exec(
+	if _, err := s.db.Exec(
 		`INSERT INTO sessions (id, title, summary, created_at, updated_at) VALUES (?, ?, '', ?, ?)`,
 		id, title, formatTime(now), formatTime(now),
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("创建会话失败: %w", err)
 	}
-	return &model.Session{ID: id, Title: title, CreatedAt: now, UpdatedAt: now}, nil
+	// 刚创建的是最新的一个，其编号即会话总数。
+	var num int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&num); err != nil {
+		return nil, fmt.Errorf("读取会话编号失败: %w", err)
+	}
+	return &model.Session{ID: id, Num: num, Title: title, CreatedAt: now, UpdatedAt: now}, nil
 }
 
-// GetSession 按标识读取会话。
+// GetSession 按内部标识读取会话。
 func (s *Store) GetSession(id string) (*model.Session, error) {
-	row := s.db.QueryRow(
-		`SELECT id, title, summary, created_at, updated_at FROM sessions WHERE id = ?`, id)
+	return s.querySession("id = ?", id, fmt.Sprintf("会话 %s", id))
+}
+
+// SessionByNum 按面向用户的编号读取会话。
+func (s *Store) SessionByNum(num int) (*model.Session, error) {
+	return s.querySession("num = ?", num, fmt.Sprintf("会话编号 %d", num))
+}
+
+// querySession 在全部会话上求值派生列之后再过滤。
+//
+// 过滤条件必须放在外层：若与 ROW_NUMBER() 同层，窗口函数只会看到过滤后的
+// 那一行，编号恒为 1。
+func (s *Store) querySession(where string, arg any, label string) (*model.Session, error) {
+	row := s.db.QueryRow(`SELECT * FROM (`+sessionColumns+`) WHERE `+where, arg)
+
 	var (
 		sess                 model.Session
 		createdAt, updatedAt string
 	)
-	err := row.Scan(&sess.ID, &sess.Title, &sess.Summary, &createdAt, &updatedAt)
+	err := row.Scan(&sess.ID, &sess.Title, &sess.Summary, &createdAt, &updatedAt,
+		&sess.Num, &sess.Preview)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: 会话 %s", ErrNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, label)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("读取会话失败: %w", err)
@@ -148,7 +182,7 @@ func (s *Store) GetSession(id string) (*model.Session, error) {
 // ListSessions 按最近活动时间倒序列出全部会话。
 func (s *Store) ListSessions() ([]model.Session, error) {
 	rows, err := s.db.Query(
-		`SELECT id, title, summary, created_at, updated_at FROM sessions ORDER BY updated_at DESC`)
+		`SELECT * FROM (` + sessionColumns + `) ORDER BY updated_at DESC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("列出会话失败: %w", err)
 	}
@@ -160,7 +194,8 @@ func (s *Store) ListSessions() ([]model.Session, error) {
 			sess                 model.Session
 			createdAt, updatedAt string
 		)
-		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Summary, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Summary, &createdAt, &updatedAt,
+			&sess.Num, &sess.Preview); err != nil {
 			return nil, fmt.Errorf("扫描会话失败: %w", err)
 		}
 		sess.CreatedAt, sess.UpdatedAt = parseTime(createdAt), parseTime(updatedAt)

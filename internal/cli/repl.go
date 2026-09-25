@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"minimal-agent/internal/agent"
 	"minimal-agent/internal/contextmgr"
@@ -88,15 +89,15 @@ func (r *REPL) Run(ctx context.Context) error {
 	}
 
 	r.printf("%s\n", r.paint(ansiBold, "最小可用 Agent"))
-	r.printf("模型：%s    当前会话：%s\n", r.model, sess.ID)
+	r.printf("模型：%s    当前会话：%s\n", r.model, sessionLabel(sess))
 	r.printf("输入 /help 查看命令，/quit 退出。\n\n")
 
 	scanner := bufio.NewScanner(r.in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for {
-		cur := r.manager.CurrentID()
-		r.printf("%s ", r.paint(ansiCyan, "["+shortID(cur)+"]>"))
+		// 提示符只显示用户能直接使用的编号，不显示内部标识。
+		r.printf("%s ", r.paint(ansiCyan, fmt.Sprintf("[%d]>", r.manager.CurrentNum())))
 		if !scanner.Scan() {
 			r.printf("\n")
 			return scanner.Err()
@@ -156,12 +157,12 @@ func (r *REPL) handleCommand(ctx context.Context, cmd Command) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		r.printf("已新建会话 %s（%s），并切换过去。\n", sess.ID, sess.Title)
+		r.printf("已新建会话 %s，并切换过去。\n", sessionLabel(sess))
 	case CmdList:
 		return false, r.showList()
 	case CmdSwitch:
 		if cmd.Arg == "" {
-			return false, fmt.Errorf("用法：/switch <会话标识>")
+			return false, fmt.Errorf("用法：/switch <编号>，例如 /switch 2；用 /list 查看全部会话")
 		}
 		sess, err := r.manager.Switch(cmd.Arg)
 		if err != nil {
@@ -171,7 +172,7 @@ func (r *REPL) handleCommand(ctx context.Context, cmd Command) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		r.printf("已切换到会话 %s（%s），该会话有 %d 条历史消息。\n", sess.ID, sess.Title, n)
+		r.printf("已切换到会话 %s，该会话有 %d 条历史消息。\n", sessionLabel(sess), n)
 	case CmdHistory:
 		return false, r.showHistory(parseLimit(cmd.Arg, 20))
 	case CmdTrace:
@@ -200,8 +201,10 @@ func (r *REPL) showList() error {
 		r.printf("还没有任何会话。用 /new 创建一个。\n")
 		return nil
 	}
+
 	current := r.manager.CurrentID()
-	r.printf("共 %d 个会话：\n", len(sessions))
+	r.printf("共 %d 个会话：\n\n", len(sessions))
+
 	for _, s := range sessions {
 		mark := " "
 		if s.ID == current {
@@ -211,10 +214,57 @@ func (r *REPL) showList() error {
 		if strings.TrimSpace(s.Summary) != "" {
 			title += "（已压缩）"
 		}
-		r.printf(" %s %s  %-12s  最近活动 %s\n",
-			mark, s.ID, title, s.UpdatedAt.Local().Format("2006-01-02 15:04:05"))
+		// 编号醒目、标题常规、时间与开头内容暗色——扫一眼先看到编号，
+		// 需要辨认时才看内容。
+		r.printf("%s %s %s · %s\n",
+			mark,
+			r.paint(ansiBold, fmt.Sprintf("[%d]", s.Num)),
+			title,
+			r.paint(ansiDim, humanTime(s.UpdatedAt)))
+
+		if p := strings.TrimSpace(s.Preview); p != "" {
+			r.printf("      %s\n", r.paint(ansiDim, truncate(oneLine(p), 56)))
+		} else {
+			r.printf("      %s\n", r.paint(ansiDim, "（还没有对话）"))
+		}
 	}
 	return nil
+}
+
+// humanTime 把时间压成人一眼能扫过的形式。
+//
+// 会话列表里精确到秒没有意义——用户想知道的是「哪个是刚聊过的」，
+// 而不是它发生在 14:44:27 还是 14:44:31。
+func humanTime(t time.Time) string { return humanizeAt(t, time.Now()) }
+
+// humanizeAt 是 humanTime 的实现，把「现在」显式传入以便测试。
+// 否则跨天边界（比如测试恰好在午夜前后运行）会让断言不稳定。
+func humanizeAt(t, now time.Time) string {
+	if t.IsZero() {
+		return "未知时间"
+	}
+	t, now = t.Local(), now.Local()
+
+	switch d := now.Sub(t); {
+	case d < time.Minute:
+		return "刚刚"
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+	case sameDay(t, now):
+		return "今天 " + t.Format("15:04")
+	case sameDay(t, now.AddDate(0, 0, -1)):
+		return "昨天 " + t.Format("15:04")
+	case t.Year() == now.Year():
+		return t.Format("1月2日")
+	default:
+		return t.Format("2006年1月2日")
+	}
+}
+
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }
 
 func (r *REPL) showHistory(limit int) error {
@@ -334,14 +384,13 @@ func (r *REPL) compact(ctx context.Context) error {
 
 // --- 小工具 ---
 
-func shortID(id string) string {
-	if len(id) > 11 {
-		return id[:11]
+// sessionLabel 是会话在提示信息里的呈现形式：编号在前、标题在后。
+// 内部标识不出现在任何面向用户的文案里——它太长，手输不现实。
+func sessionLabel(s *model.Session) string {
+	if s == nil {
+		return "[?]"
 	}
-	if id == "" {
-		return "no-session"
-	}
-	return id
+	return fmt.Sprintf("[%d] %s", s.Num, s.Title)
 }
 
 func parseLimit(arg string, def int) int {

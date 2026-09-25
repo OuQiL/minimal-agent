@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -100,6 +101,137 @@ func TestUpdateSessionSummary_UnknownSession(t *testing.T) {
 	s := newStore(t)
 	if err := s.UpdateSessionSummary("不存在", "摘要"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("错误 = %v，期望 ErrNotFound", err)
+	}
+}
+
+// 编号按创建顺序分配，与列表的排序无关。
+//
+// 这是编号能替代内部标识的前提：列表按最近活动倒序排，位置会变；
+// 编号必须始终指向同一个会话，否则用户记下的编号隔天就指错了对象。
+func TestSessions_NumberedByCreationOrderRegardlessOfListOrder(t *testing.T) {
+	s := newStore(t)
+	for _, id := range []string{"s1", "s2", "s3"} {
+		if _, err := s.CreateSession(id, id); err != nil {
+			t.Fatalf("创建失败: %v", err)
+		}
+	}
+	// 刷新 s3 的活动时间，它会排到列表最前——但编号仍应是 3。
+	if err := s.TouchSession("s3"); err != nil {
+		t.Fatalf("刷新失败: %v", err)
+	}
+
+	list, err := s.ListSessions()
+	if err != nil {
+		t.Fatalf("列出失败: %v", err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("会话数量 = %d", len(list))
+	}
+	if list[0].ID != "s3" {
+		t.Fatalf("最近活动的会话应排在最前，实际 %q", list[0].ID)
+	}
+
+	want := map[string]int{"s1": 1, "s2": 2, "s3": 3}
+	for _, sess := range list {
+		if sess.Num != want[sess.ID] {
+			t.Errorf("会话 %s 的编号 = %d，期望 %d", sess.ID, sess.Num, want[sess.ID])
+		}
+	}
+}
+
+func TestSessionByNum(t *testing.T) {
+	s := newStore(t)
+	for _, id := range []string{"s1", "s2", "s3"} {
+		if _, err := s.CreateSession(id, id); err != nil {
+			t.Fatalf("创建失败: %v", err)
+		}
+	}
+
+	sess, err := s.SessionByNum(2)
+	if err != nil {
+		t.Fatalf("按编号读取失败: %v", err)
+	}
+	if sess.ID != "s2" {
+		t.Errorf("编号 2 对应 %q，期望 s2", sess.ID)
+	}
+	if sess.Num != 2 {
+		t.Errorf("返回的编号 = %d", sess.Num)
+	}
+
+	if _, err := s.SessionByNum(99); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("不存在的编号应返回 ErrNotFound，实际 %v", err)
+	}
+}
+
+func TestCreateSession_ReturnsNumber(t *testing.T) {
+	s := newStore(t)
+	for i := range 3 {
+		sess, err := s.CreateSession(fmt.Sprintf("s%d", i+1), "t")
+		if err != nil {
+			t.Fatalf("创建失败: %v", err)
+		}
+		if sess.Num != i+1 {
+			t.Errorf("第 %d 个会话的编号 = %d，期望 %d", i+1, sess.Num, i+1)
+		}
+	}
+}
+
+// 会话列表要能让人认出这是哪段对话，因此带上首条用户消息的片段。
+func TestSessions_PreviewIsFirstUserMessage(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.CreateSession("with", "有对话"); err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+	if _, err := s.CreateSession("empty", "空会话"); err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+
+	if err := s.AppendMessages(
+		model.Message{SessionID: "with", Role: model.RoleUser, Content: "北京今天天气怎么样？"},
+		model.Message{SessionID: "with", Role: model.RoleAssistant, Content: "局部多云"},
+		model.Message{SessionID: "with", Role: model.RoleUser, Content: "谢谢"},
+	); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+
+	list, err := s.ListSessions()
+	if err != nil {
+		t.Fatalf("列出失败: %v", err)
+	}
+	byID := map[string]model.Session{}
+	for _, sess := range list {
+		byID[sess.ID] = sess
+	}
+
+	// 取的是**首条**用户消息而非最后一条：首句最能说明这段对话是关于什么的。
+	if got := byID["with"].Preview; got != "北京今天天气怎么样？" {
+		t.Errorf("片段 = %q，期望首条用户消息", got)
+	}
+	if got := byID["empty"].Preview; got != "" {
+		t.Errorf("空会话的片段应为空，实际 %q", got)
+	}
+}
+
+func TestGetSession_IncludesNumberAndPreview(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.CreateSession("s1", "甲"); err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+	if err := s.AppendMessages(model.Message{
+		SessionID: "s1", Role: model.RoleUser, Content: "第一句",
+	}); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+
+	sess, err := s.GetSession("s1")
+	if err != nil {
+		t.Fatalf("读取失败: %v", err)
+	}
+	if sess.Num != 1 {
+		t.Errorf("编号 = %d，期望 1", sess.Num)
+	}
+	if sess.Preview != "第一句" {
+		t.Errorf("片段 = %q，期望「第一句」", sess.Preview)
 	}
 }
 

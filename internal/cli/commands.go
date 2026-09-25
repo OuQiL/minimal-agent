@@ -71,8 +71,8 @@ func HelpText() string {
 	return strings.TrimRight(`
 可用命令：
   /new [标题]      新建会话并切换过去
-  /list            列出全部会话
-  /switch <标识>   切换到指定会话
+  /list            列出全部会话（含编号、标题与开头内容）
+  /switch <编号>   切换到指定会话，例如 /switch 2
   /history [n]     查看当前会话最近 n 条消息（默认 20）
   /trace [n]       查看当前会话的工具调用记录（默认 10）
   /tools           列出已注册的工具及其参数

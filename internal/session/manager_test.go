@@ -69,6 +69,117 @@ func TestNew_DefaultTitle(t *testing.T) {
 }
 
 // 切换失败时必须保持当前会话不变，否则一次笔误就丢失了正在进行的上下文。
+// 编号按创建顺序分配，是面向用户的主要引用方式。
+func TestSessions_AreNumberedFromOne(t *testing.T) {
+	m, _ := newManager(t)
+
+	a, err := m.New("甲")
+	if err != nil {
+		t.Fatalf("新建失败: %v", err)
+	}
+	b, err := m.New("乙")
+	if err != nil {
+		t.Fatalf("新建失败: %v", err)
+	}
+	c, err := m.New("丙")
+	if err != nil {
+		t.Fatalf("新建失败: %v", err)
+	}
+
+	for want, sess := range map[int]*model.Session{1: a, 2: b, 3: c} {
+		if sess.Num != want {
+			t.Errorf("会话 %s 的编号 = %d，期望 %d", sess.Title, sess.Num, want)
+		}
+	}
+	if m.CurrentNum() != 3 {
+		t.Errorf("当前编号 = %d，期望 3", m.CurrentNum())
+	}
+}
+
+func TestSwitch_ByNumber(t *testing.T) {
+	m, _ := newManager(t)
+	a, _ := m.New("甲")
+	_, _ = m.New("乙")
+
+	sess, err := m.Switch("1")
+	if err != nil {
+		t.Fatalf("按编号切换失败: %v", err)
+	}
+	if sess.ID != a.ID {
+		t.Errorf("编号 1 对应 %q，期望 %q", sess.ID, a.ID)
+	}
+	if m.CurrentID() != a.ID || m.CurrentNum() != 1 {
+		t.Errorf("当前会话未更新：id=%q num=%d", m.CurrentID(), m.CurrentNum())
+	}
+}
+
+// 内部标识仍然可用，便于脚本与日志精确定位。
+func TestSwitch_ByFullID(t *testing.T) {
+	m, _ := newManager(t)
+	_, _ = m.New("甲")
+	b, _ := m.New("乙")
+
+	if _, err := m.Switch(b.ID); err != nil {
+		t.Fatalf("按标识切换失败: %v", err)
+	}
+	if m.CurrentID() != b.ID {
+		t.Errorf("当前会话 = %q，期望 %q", m.CurrentID(), b.ID)
+	}
+}
+
+func TestSwitch_NumberIsWhitespaceTolerant(t *testing.T) {
+	m, _ := newManager(t)
+	_, _ = m.New("甲")
+
+	if _, err := m.Switch("  1  "); err != nil {
+		t.Errorf("编号两侧的空白应被忽略，实际报错: %v", err)
+	}
+}
+
+func TestSwitch_InvalidReferences(t *testing.T) {
+	m, _ := newManager(t)
+	first, _ := m.New("甲")
+
+	cases := []struct {
+		ref  string
+		want string // 错误信息中应出现的关键词
+	}{
+		{"", "编号"},
+		{"99", "99"},
+		{"0", "正整数"},
+		{"-1", "正整数"},
+		{"sess_不存在", "sess_不存在"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.ref, func(t *testing.T) {
+			_, err := m.Switch(tc.ref)
+			if err == nil {
+				t.Fatalf("%q 应切换失败", tc.ref)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("错误信息应包含 %q，实际：%v", tc.want, err)
+			}
+			// 切换失败时当前会话必须保持不变。
+			if m.CurrentID() != first.ID {
+				t.Errorf("切换失败后当前会话变成了 %q", m.CurrentID())
+			}
+		})
+	}
+}
+
+func TestResolve_DoesNotChangeCurrent(t *testing.T) {
+	m, _ := newManager(t)
+	_, _ = m.New("甲")
+	_, _ = m.New("乙")
+
+	if _, err := m.Resolve("1"); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if m.CurrentNum() != 2 {
+		t.Errorf("Resolve 不应改变当前会话，当前编号 = %d", m.CurrentNum())
+	}
+}
+
 func TestSwitch_UnknownSessionKeepsCurrent(t *testing.T) {
 	m, _ := newManager(t)
 

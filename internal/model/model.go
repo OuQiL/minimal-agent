@@ -74,9 +74,18 @@ type Response struct {
 
 // Session 是一个会话。
 type Session struct {
-	ID      string
+	// ID 是内部唯一标识（形如 sess_2efdb9c24d），程序用它做一切关联。
+	ID string
+	// Num 是面向用户的编号，按创建顺序从 1 开始递增。
+	//
+	// 单用户场景下，手输一个随机标识并不现实，因此对外只暴露这个编号。
+	// 它由创建顺序推导，因此在会话不被删除的前提下是稳定的——
+	// 列表按最近活动排序会让位置变化，编号则不会跟着变。
+	Num     int
 	Title   string
 	Summary string
+	// Preview 是会话首条用户消息的片段，用于让用户认出这是哪段对话。
+	Preview string
 	// CreatedAt 与 UpdatedAt 用于会话列表展示，UpdatedAt 表示最近活动时间。
 	CreatedAt time.Time
 	UpdatedAt time.Time
