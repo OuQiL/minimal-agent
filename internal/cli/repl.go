@@ -83,21 +83,18 @@ func (r *REPL) printf(format string, args ...any) {
 
 // Run 启动交互循环，直到用户退出或输入结束。
 func (r *REPL) Run(ctx context.Context) error {
-	sess, err := r.manager.Ensure()
-	if err != nil {
-		return err
-	}
-
+	// 刻意不在启动时创建会话：那样每次启动都会留下一个空会话，列表里越攒越多。
+	// 会话在用户真正开始对话时（发第一条消息或显式 /new）才创建。
 	r.printf("%s\n", r.paint(ansiBold, "最小可用 Agent"))
-	r.printf("模型：%s    当前会话：%s\n", r.model, sessionLabel(sess))
-	r.printf("输入 /help 查看命令，/quit 退出。\n\n")
+	r.printf("模型：%s\n", r.model)
+	r.printf("输入 /help 查看命令，/quit 退出。第一条消息会自动开一个新会话。\n\n")
 
 	scanner := bufio.NewScanner(r.in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for {
 		// 提示符只显示用户能直接使用的编号，不显示内部标识。
-		r.printf("%s ", r.paint(ansiCyan, fmt.Sprintf("[%d]>", r.manager.CurrentNum())))
+		r.printf("%s ", r.paint(ansiCyan, promptLabel(r.manager.CurrentNum())))
 		if !scanner.Scan() {
 			r.printf("\n")
 			return scanner.Err()
@@ -268,7 +265,10 @@ func sameDay(a, b time.Time) bool {
 }
 
 func (r *REPL) showHistory(limit int) error {
-	sessionID := r.manager.CurrentID()
+	sessionID, err := r.requireSession("查看历史")
+	if err != nil {
+		return err
+	}
 	msgs, err := r.store.Messages(sessionID, limit)
 	if err != nil {
 		return err
@@ -301,7 +301,10 @@ func (r *REPL) showHistory(limit int) error {
 }
 
 func (r *REPL) showTrace(limit int) error {
-	sessionID := r.manager.CurrentID()
+	sessionID, err := r.requireSession("查看工具调用记录")
+	if err != nil {
+		return err
+	}
 	traces, err := r.store.Traces(sessionID, limit)
 	if err != nil {
 		return err
@@ -364,7 +367,10 @@ func (r *REPL) showTools() error {
 }
 
 func (r *REPL) compact(ctx context.Context) error {
-	sessionID := r.manager.CurrentID()
+	sessionID, err := r.requireSession("压缩上下文")
+	if err != nil {
+		return err
+	}
 	changed, err := r.compactor.CompactNow(ctx, sessionID)
 	if err != nil {
 		return err
@@ -388,9 +394,29 @@ func (r *REPL) compact(ctx context.Context) error {
 // 内部标识不出现在任何面向用户的文案里——它太长，手输不现实。
 func sessionLabel(s *model.Session) string {
 	if s == nil {
-		return "[?]"
+		return "[新]"
 	}
 	return fmt.Sprintf("[%d] %s", s.Num, s.Title)
+}
+
+// promptLabel 生成提示符。尚未创建会话时显示 [新] 而非编号。
+func promptLabel(num int) string {
+	if num <= 0 {
+		return "[新]>"
+	}
+	return fmt.Sprintf("[%d]>", num)
+}
+
+// requireSession 返回当前会话标识，供需要已有会话的命令使用。
+//
+// 与对话路径不同，这些命令不会顺带创建会话——/history 触发一次建会话
+// 是很突兀的，用户会莫名其妙多出一个空会话。
+func (r *REPL) requireSession(action string) (string, error) {
+	id := r.manager.CurrentID()
+	if id == "" {
+		return "", fmt.Errorf("还没有任何会话，无法%s。直接输入文字开始对话，或用 /new 新建一个", action)
+	}
+	return id, nil
 }
 
 func parseLimit(arg string, def int) int {

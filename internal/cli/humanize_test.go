@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"minimal-agent/internal/model"
 )
 
 func TestHumanizeAt(t *testing.T) {
@@ -63,5 +66,39 @@ func TestHumanTime_ZeroValueIsReadable(t *testing.T) {
 	// 从数据库读出的时间解析失败时会是零值，不能显示成 0001 年。
 	if got := humanTime(time.Time{}); got != "未知时间" {
 		t.Errorf("零值时间 = %q", got)
+	}
+}
+
+// 尚未创建会话时提示符显示 [新] 而非编号——启动不建会话，
+// 因此这个状态是正常且常见的。
+func TestPromptLabel(t *testing.T) {
+	cases := []struct {
+		num  int
+		want string
+	}{
+		{0, "[新]>"},
+		{-1, "[新]>"},
+		{1, "[1]>"},
+		{12, "[12]>"},
+		{100, "[100]>"},
+	}
+	for _, tc := range cases {
+		if got := promptLabel(tc.num); got != tc.want {
+			t.Errorf("promptLabel(%d) = %q，期望 %q", tc.num, got, tc.want)
+		}
+	}
+}
+
+func TestSessionLabel(t *testing.T) {
+	if got := sessionLabel(nil); got != "[新]" {
+		t.Errorf("无会话时 = %q，期望「[新]」", got)
+	}
+	s := &model.Session{Num: 3, Title: "查天气记待办"}
+	if got := sessionLabel(s); got != "[3] 查天气记待办" {
+		t.Errorf("会话标签 = %q", got)
+	}
+	// 内部标识不应出现在面向用户的文案里。
+	if got := sessionLabel(&model.Session{ID: "sess_abc123", Num: 1, Title: "t"}); strings.Contains(got, "sess_") {
+		t.Errorf("会话标签不应包含内部标识，实际 %q", got)
 	}
 }
