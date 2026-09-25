@@ -12,15 +12,19 @@ import (
 const (
 	ansiReset = "\033[0m"
 	ansiDim   = "\033[2m"
-	ansiCyan  = "\033[36m"
-	ansiBold  = "\033[1m"
 )
 
 // ConsoleSink 把流式增量渲染到终端。
 //
-// 三类输出用样式区分：思维链暗色前缀、正文常规输出、工具调用高亮提示。
-// 这样屏幕上不会出现「看起来像答案、其实是过程说明」的歧义——
-// 模型可能先输出一段正文再请求调用工具，那段正文并不是最终答复。
+// 视觉规则只有一条：**只有最终答复是明亮的**。
+// 思维链与工具调用都属于「过程」，一律暗色，让它们退到背景里。
+//
+// 正文则一律明亮。这里有个无法回避的取舍：一段正文究竟是最终答复还是
+// 过程说明，要等 finish_reason 到达才知道，而那时它已经打印出去了——
+// 流式渲染没有「反悔」的余地。两害相权取其轻：把正文渲染成常规样式，
+// 保证**最终答复一定是亮的**；代价是极少数「先输出一段说明再调工具」的
+// 情形下，那段说明也会是亮的。反过来做（正文一律暗色）则会牺牲最终答复
+// 的醒目程度，那是更糟的失误。
 type ConsoleSink struct {
 	out   io.Writer
 	color bool
@@ -75,6 +79,9 @@ func (c *ConsoleSink) OnContent(delta string) {
 }
 
 // OnToolCall 报告一个工具调用已拼装完成。
+//
+// 与思维链同样按暗色呈现：工具调用是过程，不是结果，
+// 视觉上应当退到背景里，把注意力让给最终的答复。
 func (c *ConsoleSink) OnToolCall(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -83,7 +90,7 @@ func (c *ConsoleSink) OnToolCall(name string) {
 		fmt.Fprintln(c.out)
 		c.lineOpen = false
 	}
-	fmt.Fprintln(c.out, c.paint(ansiCyan, fmt.Sprintf("→ 调用工具 %s", name)))
+	fmt.Fprintln(c.out, c.paint(ansiDim, fmt.Sprintf("→ 调用工具 %s", name)))
 }
 
 // OnDone 在响应收齐后收尾换行。

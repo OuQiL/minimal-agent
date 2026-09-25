@@ -8,8 +8,8 @@ import (
 	"minimal-agent/internal/agent"
 )
 
-// 三类输出必须能被区分，否则屏幕上会出现「看起来像答案、其实是过程说明」
-// 的歧义——模型可能先输出一段正文再请求调用工具，那段正文并非最终答复。
+// 视觉规则：只有最终答复是明亮的，思维链与工具调用都属于过程，应当退到背景。
+// 这条规则若被破坏，用户就很难一眼分辨「模型还在干活」与「模型已经答完了」。
 func TestConsoleSink_DistinguishesOutputKinds(t *testing.T) {
 	var buf bytes.Buffer
 	s := agent.NewConsoleSink(&buf, true)
@@ -20,6 +20,8 @@ func TestConsoleSink_DistinguishesOutputKinds(t *testing.T) {
 	s.OnDone()
 
 	out := buf.String()
+	// 把转义序列显式打出来，便于核对实际样式。
+	t.Logf("原始输出（\\033 即 ESC）：%q", out)
 
 	if !strings.Contains(out, "[思考]") {
 		t.Error("思维链应带可识别的前缀")
@@ -34,13 +36,16 @@ func TestConsoleSink_DistinguishesOutputKinds(t *testing.T) {
 		t.Error("工具调用应被提示")
 	}
 
-	// 思维链要暗色化，正文不能——否则两者在视觉上无法区分。
-	dimmedReasoning := "\033[2m让我想想"
-	if !strings.Contains(out, dimmedReasoning) {
+	// 视觉规则：只有最终答复是明亮的。
+	// 思维链与工具调用都属于过程，一律暗色；正文保持常规，以确保答复醒目。
+	if !strings.Contains(out, "\033[2m让我想想") {
 		t.Errorf("思维链应以暗色呈现，实际输出：%q", out)
 	}
+	if !strings.Contains(out, "\033[2m→ 调用工具 weather") {
+		t.Errorf("工具调用提示应以暗色呈现，实际输出：%q", out)
+	}
 	if strings.Contains(out, "\033[2m结论是甲") {
-		t.Errorf("正文不应被当作过程说明着色，实际输出：%q", out)
+		t.Errorf("正文不应被暗色化——最终答复必须醒目，实际输出：%q", out)
 	}
 
 	// 顺序：思维链 → 正文 → 工具提示
