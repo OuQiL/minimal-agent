@@ -1,0 +1,67 @@
+# 最小可用 Agent 的配置文件样例
+#
+# 使用方式：复制为 config.yaml 后按需修改。
+#   cp config.example.yaml config.yaml
+#
+# config.yaml 已被 .gitignore 排除——它可能含有密钥，不应进入版本库。
+#
+# 优先级：环境变量 > 本文件 > 内置默认值。
+# 因此临时切换模型或密钥时，用环境变量覆盖即可，不必改动本文件。
+# 所有字段都是可选的，留空或删除即表示使用默认值。
+
+llm:
+  # 模型服务的 OpenAI 兼容端点。
+  # 换用其他供应商只需改这里，代码无需改动。
+  base_url: https://api.deepseek.com/v1
+
+  # 模型服务密钥。也可改用环境变量 OPENAI_API_KEY。
+  api_key: ""
+
+  model: deepseek-chat
+
+  # 请求建立阶段失败的重试次数（不含首次）。
+  max_retries: 3
+
+  # 单次模型请求的总超时。流式响应可能持续较久，故默认值较大。
+  timeout: 120s
+
+search:
+  # 博查搜索密钥。也可改用环境变量 BOCHA_API_KEY。
+  # 留空时搜索工具不会崩溃，而是回填一条「服务未配置」的可读说明，
+  # 其余功能不受影响。
+  api_key: ""
+
+  base_url: https://api.bochaai.com
+
+weather:
+  # Open-Meteo 无需任何密钥，注册即用。
+  forecast_url: https://api.open-meteo.com
+  geocode_url: https://geocoding-api.open-meteo.com
+
+agent:
+  # 单轮用户输入允许的最大工具调用轮次，达到后停止并如实说明。
+  max_tool_turns: 8
+
+  # 同一轮内多个工具的并发上限。
+  max_tool_parallel: 4
+
+  # 单个工具执行（含其外部网络调用）的超时。
+  tool_timeout: 10s
+
+  # 进入上下文的历史消息条数上限。
+  max_history_messages: 40
+
+  # 消息总字符数超过该值时触发压缩。
+  # 用字符数而非 token 数近似：中文场景下 1 字符约对应 1 token 量级。
+  compact_threshold: 12000
+
+  # 压缩时保留原文的最近轮数。
+  keep_recent_turns: 6
+
+storage:
+  # SQLite 数据库路径，不存在时自动创建。
+  db_path: agent.db
+
+output:
+  # 填写后执行日志除输出到终端外，还追加写入该文件。
+  log_file: ""

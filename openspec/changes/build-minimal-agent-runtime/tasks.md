@@ -1,8 +1,11 @@
 ﻿## 1. 项目骨架与依赖
 
 - [x] 1.1 初始化 Go module（`go mod init`），建立 `main.go` 与 `internal/{llm,agent,tool,session,contextmgr,store}` 目录骨架；验证：`go build ./...` 成功且目录结构符合 design.md 决策中的包布局
-- [x] 1.2 引入 `modernc.org/sqlite` 与 `github.com/openai/openai-go` 两项外部依赖并锁定版本；验证：`go mod tidy` 后 `go.mod` 中直接依赖恰为这两项，且 `go build ./...` 通过
-- [x] 1.3 编写 `.gitignore`（排除 `*.db`、`*.db-journal`、`*.log`、编译产物）并初始化 git 仓库；验证：`git status` 中不含数据库与日志文件
+- [x] 1.2 引入 `modernc.org/sqlite`、`github.com/openai/openai-go` 与 `gopkg.in/yaml.v3` 三项外部依赖并锁定版本；验证：`go mod tidy` 后 `go.mod` 中直接依赖恰为这三项，且 `go build ./...` 通过
+- [x] 1.3 编写 `.gitignore`（排除 `*.db`、`*.db-journal`、`*.log`、编译产物、含密钥的 `config.yaml`）并初始化 git 仓库；验证：`git status` 中不含数据库、日志与本地配置文件
+- [x] 1.4 实现配置三级装载：内置默认值 → `config.yaml` → 环境变量，后者覆盖前者；环境变量为空串等同于未设置；支持 `AGENT_CONFIG` 指定路径；默认位置的文件缺失时静默回退，显式指定的文件缺失时报错；验证：单测覆盖默认值、文件覆盖默认、环境变量覆盖文件、空环境变量不覆盖文件、显式路径缺失报错五类情形
+- [x] 1.5 配置文件健壮性：空文件与仅含注释的文件按默认值处理；YAML 格式错误与**未知字段**（如 `api_kye` 拼写错误）均以指明文件与字段名的错误拒绝；超时字段同时接受 `10s` 与纯数字（按秒解释）；验证：单测逐项断言
+- [x] 1.6 编写 `config.example.yaml` 样例并加一条测试直接装载它，防止样例与实际字段定义漂移；验证：`go test ./internal/config/...` 中样例装载用例通过
 
 ## 2. LLM 客户端（基于 openai-go SDK）
 

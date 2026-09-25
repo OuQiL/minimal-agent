@@ -31,7 +31,10 @@ func main() {
 }
 
 func run() error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 
 	closeLog, err := setupLogging(cfg)
 	if err != nil {
@@ -39,6 +42,9 @@ func run() error {
 	}
 	defer closeLog()
 
+	if cfg.Source != "" {
+		slog.Info("已装载配置文件", "path", cfg.Source)
+	}
 	warnMissingConfig(cfg)
 
 	st, err := store.Open(cfg.DBPath)

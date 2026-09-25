@@ -14,9 +14,12 @@ data/
 *.test
 *.out
 
-# 密钥
+# 密钥与本地配置
 .env
 .env.local
+# 实际使用的配置文件可能含密钥，不进版本库；样例 config.example.yaml 会提交
+config.yaml
+config.local.yaml
 
 # 编辑器
 .idea/

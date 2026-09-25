@@ -13,6 +13,7 @@
 - 实现多会话管理：多个 session 相互隔离，可随时切换并接续历史；以 **SQLite** 落盘，进程重启后会话不丢失
 - 实现上下文管理：最大轮次限制、多轮状态记忆、纯对话追问与带工具追问、上下文超长时的基础压缩（以**可替换的消息重写钩子**组织），并明确每轮 **context 的组装策略**与 memory 召回时机
 - 实现可观测性与健壮性：工具调用 trace 与执行日志、基础异常处理（LLM 请求失败、工具执行失败、模型输出格式异常）
+- 支持配置文件：配置按「内置默认值 → 配置文件 → 环境变量」三级装载。日常配置写在 `config.yaml` 便于查看与留档，临时切换模型或密钥用环境变量覆盖，不必改文件。配置文件含密钥，默认不进版本库，另附样例文件供参考
 - 构建测试用例覆盖上述功能；提供 README 说明运行方式、系统设计、memory 的召回时机与放置方式；记录 AI Prompt 与问题解决过程
 
 **BREAKING**: 无（全新项目，无既有代码或接口需要兼容）
@@ -38,7 +39,9 @@
 - **外部依赖**: `modernc.org/sqlite`（纯 Go SQLite 驱动）与 `github.com/openai/openai-go`（官方 OpenAI Go SDK，v1.12.0）。两者均已实测可拉取、可编译运行。**禁止范围仍然是 agent 框架**（langgraph / openhands / openclaw / PI 这类）——SDK 只承担传输与协议反序列化，循环控制、工具协议、会话隔离、上下文管理全部自研；CLI REPL 与测试仍使用 Go 标准库
 - **LLM 接入**: 采用 OpenAI 兼容 Chat Completions 协议，通过 SDK 的 `WithBaseURL` 配合 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` 环境变量切换供应商（DeepSeek、Qwen、Kimi、OpenAI 等通用）。流式与重试由 SDK 提供，但「已在吐字后中途断连」不重试，由应用层处理。**需真实 API Key 才能端到端运行**，测试用例通过本地 mock server 规避该依赖
 - **外部服务**: `weather` 接 Open-Meteo——已实测可达、**无需 API Key**、支持中文城市名，需「地理编码 → 预报」两次调用；`search` 接博查 Bocha——已实测可达，需 `BOCHA_API_KEY`。两个工具的 API 端点与 HTTP 客户端均通过依赖注入传入，使测试用 `httptest.Server` 即可完整覆盖解析逻辑，**不发起真实网络请求**
-- **新增配置项**: `BOCHA_API_KEY`（搜索必需）。未配置时 `search` 工具不崩溃，而是向模型回填「服务未配置」的说明，其余功能照常可用
+- **配置来源**: 支持 `config.yaml` 配置文件，与环境变量并存。优先级为**环境变量 > 配置文件 > 默认值**；默认位置为工作目录下的 `config.yaml`，可用 `AGENT_CONFIG` 指定其他路径；默认位置的文件不存在时静默回退到默认值，行为与纯环境变量方式一致。为此引入第三个直接依赖 `gopkg.in/yaml.v3`（无间接依赖）
+- **新增配置项**: 搜索密钥（搜索必需，环境变量 `BOCHA_API_KEY` 或配置文件 `search.api_key`）。未配置时 `search` 工具不崩溃，而是向模型回填「服务未配置」的说明，其余功能照常可用
+- **密钥与版本库**: 实际使用的 `config.yaml` 可能含密钥，已纳入 `.gitignore`；提交 `config.example.yaml` 作为字段参考
 - **产物**: 源码仓库 + README + AI Prompt 与问题解决记录；数据库文件 `*.db` 与日志文件需纳入 `.gitignore`，不进版本库
 - **交互形态**: CLI REPL，通过 `/new`、`/switch <id>`、`/list`、`/history` 等命令管理会话
 - **已知假设**（需求未明确，按此默认执行）:
