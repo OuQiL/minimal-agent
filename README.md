@@ -27,8 +27,8 @@
 需要 **Go 1.25 或更高版本**。
 
 ```bash
-git clone <仓库地址>
-cd <仓库目录>
+git clone https://github.com/OuQiL/minimal-agent.git
+cd minimal-agent
 go build -o agent .        # Windows 上生成 agent.exe
 ```
 
