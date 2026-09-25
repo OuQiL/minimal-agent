@@ -17,16 +17,13 @@ data/
 # 密钥与本地配置
 .env
 .env.local
-# 实际使用的配置文件可能含密钥，不进版本库；样例 config.example.yaml 会提交
-config.yaml
-config.local.yaml
+# 实际使用的配置文件可能含密钥，不进版本库；样例 config.example.yaml 会提交。
+# 锚定到根目录——否则会连带排除 openspec/config.yaml，那是不含密钥的项目文件。
+/config.yaml
+/config.local.yaml
 
 # 编辑器
 .idea/
 .vscode/
 *.swp
 /需求
-
-# 开发过程产物，不随代码交付
-/openspec/
-/AI-PROMPT-AND-PROBLEMS.md
