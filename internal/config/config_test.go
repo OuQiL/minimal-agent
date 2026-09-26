@@ -337,6 +337,45 @@ func TestLoadFrom_NoColorPointerSemantics(t *testing.T) {
 	})
 }
 
+// 日志默认落盘：跑完关掉终端后，仍能回看这一轮是怎么走过来的。
+func TestLoadFrom_LogFileDefaultsToAgentLog(t *testing.T) {
+	clearEnv(t)
+
+	cfg, err := config.LoadFrom("")
+	if err != nil {
+		t.Fatalf("装载失败: %v", err)
+	}
+	if cfg.LogFile != config.DefaultLogFile {
+		t.Errorf("LogFile 默认值 = %q，期望 %q", cfg.LogFile, config.DefaultLogFile)
+	}
+}
+
+// 有默认值就必须有关闭方式。本项目统一「空串即未设置」，
+// LOG_FILE="" 只会被当成没配，所以要一个显式的哨兵值。
+func TestLoadFrom_LogFileCanBeDisabled(t *testing.T) {
+	clearEnv(t)
+
+	cfg, err := config.LoadFrom(writeConfig(t, "output:\n  log_file: \"-\"\n"))
+	if err != nil {
+		t.Fatalf("装载失败: %v", err)
+	}
+	if cfg.LogFile != config.DisableLogFile {
+		t.Errorf("LogFile = %q，期望关闭值 %q", cfg.LogFile, config.DisableLogFile)
+	}
+}
+
+func TestLoadFrom_LogFileOverride(t *testing.T) {
+	clearEnv(t)
+
+	cfg, err := config.LoadFrom(writeConfig(t, "output:\n  log_file: custom.log\n"))
+	if err != nil {
+		t.Fatalf("装载失败: %v", err)
+	}
+	if cfg.LogFile != "custom.log" {
+		t.Errorf("LogFile = %q，期望 custom.log", cfg.LogFile)
+	}
+}
+
 func TestSearchConfigured(t *testing.T) {
 	clearEnv(t)
 

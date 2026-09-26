@@ -24,6 +24,13 @@ const (
 	DefaultFileName = "config.yaml"
 	// EnvConfigPath 指定配置文件路径，便于把配置放到工作目录之外。
 	EnvConfigPath = "AGENT_CONFIG"
+	// DefaultLogFile 是执行日志的默认落盘路径。
+	DefaultLogFile = "agent.log"
+	// DisableLogFile 是 LogFile 的关闭值，写了它表示只输出到终端、不落盘。
+	//
+	// 需要这个哨兵值，是因为本项目统一的「空串即未设置」语义表达不了
+	// 「显式关掉一个有默认值的开关」——`LOG_FILE=""` 只会被当成没配。
+	DisableLogFile = "-"
 )
 
 // Config 汇总全部运行期配置。
@@ -58,7 +65,8 @@ type Config struct {
 	ToolTimeout time.Duration
 
 	// --- 输出 ---
-	// LogFile 非空时，执行日志除输出到终端外还追加写入该文件。
+	// LogFile 是执行日志的落盘路径，除输出到终端外还追加写入该文件。
+	// 置为 DisableLogFile 可只输出到终端。
 	LogFile string
 	// DBPath 是 SQLite 数据库文件路径。
 	DBPath string
@@ -208,7 +216,7 @@ func defaults() Config {
 		MaxToolParallel:  4,
 		ToolTimeout:      10 * time.Second,
 
-		LogFile: "",
+		LogFile: DefaultLogFile,
 		DBPath:  "agent.db",
 		NoColor: false,
 	}

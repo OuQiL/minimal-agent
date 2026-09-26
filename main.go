@@ -36,11 +36,7 @@ func run() error {
 		return err
 	}
 
-	closeLog, err := setupLogging(cfg)
-	if err != nil {
-		return err
-	}
-	defer closeLog()
+	defer setupLogging(cfg)()
 
 	if cfg.Source != "" {
 		slog.Info("已装载配置文件", "path", cfg.Source)
@@ -133,32 +129,45 @@ func warnMissingConfig(cfg config.Config) {
 	}
 }
 
-// setupLogging 配置结构化日志。
+// setupLogging 配置结构化日志，返回收尾函数。
 //
-// 日志写 stderr，把 stdout 完整留给对话输出，便于重定向与拷屏。
-func setupLogging(cfg config.Config) (func(), error) {
-	outputs := []io.Writer{os.Stderr}
-	var f *os.File
-
-	if cfg.LogFile != "" {
-		var err error
-		f, err = os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			return nil, fmt.Errorf("打开日志文件失败: %w", err)
-		}
-		outputs = append(outputs, f)
-	}
-
+// 日志总是写 stderr，把 stdout 完整留给对话输出，便于重定向与拷屏；
+// 另外按配置追加写入文件（默认 agent.log，置为 "-" 则只输出到终端）。
+//
+// 写文件失败不阻断启动：日志是辅助功能，不该因为它写不进去就让程序起不来。
+// 但会明确告警，而不是静默降级——否则用户会以为日志记下来了。
+func setupLogging(cfg config.Config) func() {
 	level := slog.LevelInfo
 	if os.Getenv("DEBUG") != "" {
 		level = slog.LevelDebug
 	}
-	handler := slog.NewTextHandler(io.MultiWriter(outputs...), &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(handler))
+
+	outputs := []io.Writer{os.Stderr}
+	var (
+		logFile *os.File
+		openErr error
+	)
+
+	if path := cfg.LogFile; path != "" && path != config.DisableLogFile {
+		logFile, openErr = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if openErr != nil {
+			logFile = nil
+		}
+	}
+	if logFile != nil {
+		outputs = append(outputs, logFile)
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(
+		io.MultiWriter(outputs...), &slog.HandlerOptions{Level: level})))
+
+	if openErr != nil {
+		slog.Warn("日志文件无法写入，本次只输出到终端", "path", cfg.LogFile, "err", openErr)
+	}
 
 	return func() {
-		if f != nil {
-			f.Close()
+		if logFile != nil {
+			logFile.Close()
 		}
-	}, nil
+	}
 }
